@@ -1,11 +1,51 @@
 import streamlit as st
-import requests
-import json
+import torch
+import torch.nn as nn
+import joblib
+import numpy as np
+import os
+
+# Model definition (must match training)
+class HeartNet(nn.Module):
+    def __init__(self, input_size):
+        super(HeartNet, self).__init__()
+        self.fc1 = nn.Linear(input_size, 16)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(16, 8)
+        self.fc3 = nn.Linear(8, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x = self.sigmoid(self.fc3(x))
+        return x
+
+@st.cache_resource
+def load_model_and_scaler():
+    model_path = "model/heart_model.pth"
+    scaler_path = "model/scaler.pkl"
+    
+    if os.path.exists(model_path) and os.path.exists(scaler_path):
+        scaler = joblib.load(scaler_path)
+        input_size = scaler.n_features_in_
+        model = HeartNet(input_size)
+        model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        model.eval()
+        return model, scaler
+    else:
+        return None, None
 
 st.set_page_config(page_title="Heart Disease Predictor", layout="centered")
 
 st.title("❤️ Heart Disease Prediction System")
 st.markdown("Enter the patient details below to predict the likelihood of heart disease.")
+
+model, scaler = load_model_and_scaler()
+
+if model is None or scaler is None:
+    st.error("Model or scaler files not found. Please ensure `model/heart_model.pth` and `model/scaler.pkl` exist.")
+    st.stop()
 
 # Input Form
 with st.form("prediction_form"):
@@ -32,41 +72,30 @@ with st.form("prediction_form"):
     submit_button = st.form_submit_button(label="Predict")
 
 if submit_button:
-    # Prepare data for API
-    payload = {
-        "age": float(age),
-        "sex": float(sex),
-        "chest_pain_type": float(chest_pain_type),
-        "resting_blood_pressure": float(resting_blood_pressure),
-        "cholesterol": float(cholesterol),
-        "fasting_blood_sugar": float(fasting_blood_sugar),
-        "resting_ecg": float(resting_ecg),
-        "max_heart_rate": float(max_heart_rate),
-        "exercise_induced_angina": float(exercise_induced_angina),
-        "st_depression": float(st_depression),
-        "st_slope": float(st_slope),
-        "num_major_vessels": float(num_major_vessels),
-        "thalassemia": float(thalassemia)
-    }
+    # Preprocess input
+    input_features = np.array([[
+        age, sex, chest_pain_type, resting_blood_pressure,
+        cholesterol, fasting_blood_sugar, resting_ecg,
+        max_heart_rate, exercise_induced_angina, st_depression,
+        st_slope, num_major_vessels, thalassemia
+    ]])
     
     try:
-        # Backend URL (Update if deployed)
-        backend_url = "http://localhost:8000/predict"
-        response = requests.post(backend_url, json=payload)
+        input_scaled = scaler.transform(input_features)
+        input_tensor = torch.FloatTensor(input_scaled)
         
-        if response.status_code == 200:
-            result = response.json()
-            prob = result["heart_disease_probability"]
-            pred = result["prediction"]
-            
-            st.divider()
-            if pred == 1:
-                st.error(f"Prediction: **HEART DISEASE DETECTED** (Probability: {prob:.2f})")
-            else:
-                st.success(f"Prediction: **NO HEART DISEASE** (Probability: {prob:.2f})")
+        # Inference
+        with torch.no_grad():
+            prediction = model(input_tensor).item()
+        
+        prob = prediction
+        pred = 1 if prob > 0.5 else 0
+        
+        st.divider()
+        if pred == 1:
+            st.error(f"Prediction: **HEART DISEASE DETECTED** (Probability: {prob:.2f})")
         else:
-            st.warning("Could not reach the backend. Is it running?")
+            st.success(f"Prediction: **NO HEART DISEASE** (Probability: {prob:.2f})")
             
     except Exception as e:
-        st.error(f"Error: {e}")
-
+        st.error(f"Error during prediction: {e}")

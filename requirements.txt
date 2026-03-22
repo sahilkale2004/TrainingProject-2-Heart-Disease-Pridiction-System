@@ -1,10 +1,8 @@
-fastapi
-uvicorn
-pydantic
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 torch
 joblib
 numpy
 pandas
 scikit-learn
 streamlit
-requests
